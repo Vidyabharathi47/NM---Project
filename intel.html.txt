@@ -1,0 +1,17 @@
+import pandas as pd
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import sqlite3
+
+
+df = pd.read_excel("dataset/historical_speeches_100_dataset.xlsx")
+
+analyzer = SentimentIntensityAnalyzer()
+
+def get_sentiment(text):
+    if pd.isna(text):
+        return None
+    return analyzer.polarity_scores(text)['compound']
+
+df['sentiment_score'] = df['Speech_Text'].apply(get_sentiment)
+
+df.to_excel("dat_
