@@ -1,17 +1,72 @@
-import pandas as pd
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-import sqlite3
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import create_engine, Column, Integer, String, Float, Date
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+from datetime import datetime
+import nltk
 
+# Download VADER lexicon if not already downloaded
+nltk.download('vader_lexicon')
 
-df = pd.read_excel("dataset/historical_speeches_100_dataset.xlsx")
+# Setup sentiment analyzer
+sid = SentimentIntensityAnalyzer()
 
-analyzer = SentimentIntensityAnalyzer()
+# SQLite DB for simplicity
+DATABASE_URL = "sqlite:///./speeches.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-def get_sentiment(text):
-    if pd.isna(text):
-        return None
-    return analyzer.polarity_scores(text)['compound']
+# Speech DB model
+class Speech(Base):
+    __tablename__ = "speeches"
+    id = Column(Integer, primary_key=True, index=True)
+    speaker = Column(String)
+    date = Column(Date)
+    text = Column(String)
+    sentiment = Column(Float)
 
-df['sentiment_score'] = df['Speech_Text'].apply(get_sentiment)
+Base.metadata.create_all(bind=engine)
 
-df.to_excel("dat_
+# FastAPI app
+app = FastAPI()
+
+class SpeechInput(BaseModel):
+    speaker: str
+    date: str
+    text: str
+
+@app.post("/analyze/")
+def analyze_speech(speech: SpeechInput):
+    try:
+        score = sid.polarity_scores(speech.text)["compound"]
+        date_obj = datetime.strptime(speech.date, "%Y-%m-%d").date()
+
+        db = SessionLocal()
+        db_speech = Speech(
+            speaker=speech.speaker,
+            date=date_obj,
+            text=speech.text,
+            sentiment=score
+        )
+        db.add(db_speech)
+        db.commit()
+        db.refresh(db_speech)
+        db.close()
+
+        return {"message": "Speech analyzed", "sentiment_score": score}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sentiment_trends/{speaker}")
+def get_trends(speaker: str):
+    db = SessionLocal()
+    results = db.query(Speech).filter(Speech.speaker == speaker).order_by(Speech.date).all()
+    db.close()
+
+    if not results:
+        raise HTTPException(status_code=404, detail="No speeches found for this speaker.")
+
+    return [{"date": r.date.isoformat(), "sentiment": r.sentiment} for r in results]
